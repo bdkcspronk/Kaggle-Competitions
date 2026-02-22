@@ -1,12 +1,19 @@
 # Spaceship Titanic - Boosted Tree Improvements
 
-`improved_bdt_pipeline.py` now runs **without external ML packages** and produces `submission_improved.csv` directly in this environment.
+`improved_bdt_pipeline.py` runs **without external ML packages** and produces `submission_improved.csv`.
 
-## What changed
+## Feature and imputation behavior
 
-- Uses a pure-Python boosted decision stump model (gradient boosting style) so no `numpy/pandas/sklearn/xgboost` install is required.
-- Keeps useful structured feature engineering from the notebook (`Group_num`, cabin splits, spending aggregates, surname).
-- Uses smoothed surname target encoding and threshold tuning before converting probabilities to labels.
+- New engineered features include:
+  - `SpentMoney` (alias of total spend),
+  - `GroupSize` from `PassengerId` group counts,
+  - `SpendPerPerson` (`TotalSpent / GroupSize`),
+  - plus `TotalSpent`, `ZeroSpend`, `LogTotalSpent`, cabin/group/surname splits.
+- Missing-data handling is rule/median based (not model-based):
+  - spend columns default to `0`,
+  - `CryoSleep` missing values are inferred from spending (`True` when total spend is `0`, else `False`),
+  - age uses HomePlanet median fallback,
+  - remaining numeric gaps are filled with global medians.
 
 ## Run
 

@@ -24,7 +24,8 @@ CAT_COLS = ["HomePlanet", "Destination", "Deck", "Side", "Group_num", "Group_id"
 NUM_COLS = [
     "Age", "VIP", "CryoSleep",
     "RoomService", "FoodCourt", "ShoppingMall", "Spa", "VRDeck",
-    "Cabin_num", "TotalSpent", "ZeroSpend", "LogTotalSpent",
+    "Cabin_num", "TotalSpent", "SpentMoney", "ZeroSpend", "LogTotalSpent",
+    "GroupSize", "SpendPerPerson",
 ]
 ALL_FEATURES = CAT_COLS + NUM_COLS
 SEEDS = [42]
@@ -148,13 +149,41 @@ def to_float(value: str, default: float = 0.0) -> float:
         return default
 
 
-def add_features(rows: list[dict[str, str]]) -> list[dict[str, str | float]]:
+
+
+def compute_group_sizes(rows: list[dict[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for r in rows:
+        pid = r.get("PassengerId", "")
+        group = pid.split("_")[0] if "_" in pid else "0"
+        counts[group] = counts.get(group, 0) + 1
+    return counts
+
+
+def compute_homeplanet_age_medians(rows: list[dict[str, str]]) -> dict[str, float]:
+    by_planet: dict[str, list[float]] = {}
+    for r in rows:
+        hp = (r.get("HomePlanet") or "Unknown")
+        try:
+            age = float(r.get("Age"))
+            by_planet.setdefault(hp, []).append(age)
+        except (TypeError, ValueError):
+            continue
+    medians: dict[str, float] = {}
+    for hp, vals in by_planet.items():
+        if vals:
+            medians[hp] = median(vals)
+    return medians
+
+
+def add_features(rows: list[dict[str, str]], group_sizes: dict[str, int] | None = None, homeplanet_age_medians: dict[str, float] | None = None) -> list[dict[str, str | float]]:
     out = []
     for r in rows:
         row = dict(r)
         pid = row.get("PassengerId", "")
         parts = pid.split("_") if "_" in pid else ["0", "0"]
         row["Group_num"], row["Group_id"] = parts[0], parts[1]
+        row["GroupSize"] = float(group_sizes.get(row["Group_num"], 1) if group_sizes else 1)
 
         cabin = row.get("Cabin") or "Unknown/0/Unknown"
         c = cabin.split("/")
@@ -171,15 +200,26 @@ def add_features(rows: list[dict[str, str]]) -> list[dict[str, str | float]]:
             row[col] = v
             total += v
         row["TotalSpent"] = total
+        row["SpentMoney"] = total
         row["ZeroSpend"] = 1.0 if total == 0 else 0.0
         row["LogTotalSpent"] = math.log1p(total)
-
-        row["Age"] = to_float(row.get("Age", ""), float("nan"))
-        row["VIP"] = 1.0 if str(row.get("VIP", "False")).lower() == "true" else 0.0
-        row["CryoSleep"] = 1.0 if str(row.get("CryoSleep", "False")).lower() == "true" else 0.0
-        row["Cabin_num"] = to_float(row["Cabin_num"], float("nan"))
+        row["SpendPerPerson"] = total / max(row["GroupSize"], 1.0)
 
         row["HomePlanet"] = row.get("HomePlanet") or "Unknown"
+        age_default = float("nan")
+        if homeplanet_age_medians is not None and row["HomePlanet"] in homeplanet_age_medians:
+            age_default = homeplanet_age_medians[row["HomePlanet"]]
+        row["Age"] = to_float(row.get("Age", ""), age_default)
+        row["VIP"] = 1.0 if str(row.get("VIP", "False")).lower() == "true" else 0.0
+
+        cryo_raw = row.get("CryoSleep")
+        if cryo_raw in (None, ""):
+            row["CryoSleep"] = 1.0 if total == 0 else 0.0
+        else:
+            row["CryoSleep"] = 1.0 if str(cryo_raw).lower() == "true" else 0.0
+
+        row["Cabin_num"] = to_float(row["Cabin_num"], float("nan"))
+
         row["Destination"] = row.get("Destination") or "Unknown"
         row["Deck"] = row.get("Deck") or "Unknown"
         row["Side"] = row.get("Side") or "Unknown"
@@ -278,8 +318,14 @@ def find_best_threshold(y: list[int], p: list[float]) -> tuple[float, float]:
 
 
 def main() -> None:
-    train_raw = add_features(load_csv(TRAIN_PATH))
-    test_raw = add_features(load_csv(TEST_PATH))
+    train_base = load_csv(TRAIN_PATH)
+    test_base = load_csv(TEST_PATH)
+    all_base = train_base + test_base
+    group_sizes = compute_group_sizes(all_base)
+    hp_age_medians = compute_homeplanet_age_medians(train_base)
+
+    train_raw = add_features(train_base, group_sizes=group_sizes, homeplanet_age_medians=hp_age_medians)
+    test_raw = add_features(test_base, group_sizes=group_sizes, homeplanet_age_medians=hp_age_medians)
     fill_missing(train_raw, test_raw)
 
     y = [1 if str(r["Transported"]).lower() == "true" else 0 for r in train_raw]
